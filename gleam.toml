@@ -18,6 +18,11 @@ mist = ">= 3.0.0 and < 4.0.0"
 gleam_erlang = ">= 0.26.0 and < 1.0.0"
 gleam_http = ">= 3.7.0 and < 4.0.0"
 gleam_otp = ">= 0.12.0 and < 1.0.0"
+file_streams = ">= 1.1.1 and < 2.0.0"
+fswalk = ">= 3.0.2 and < 4.0.0"
+gleam_json = ">= 2.0.0 and < 3.0.0"
+gcalc = ">= 0.1.1 and < 1.0.0"
+dot_env = ">= 1.1.0 and < 2.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"

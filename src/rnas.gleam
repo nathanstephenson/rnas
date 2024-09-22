@@ -1,23 +1,37 @@
+import dot_env
+import dot_env/env
+import fs
+import gleam/bool
 import gleam/bytes_builder
 import gleam/erlang/process
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/io
 import gleam/iterator
+import gleam/json
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
 import mist
+import util
 
 pub fn main() {
   io.println("Hello from rnas!")
 
+  io.println("Loading environment variables from ./.env")
+  dot_env.new()
+  |> dot_env.set_path("./.env")
+  |> dot_env.load
+  io.println(string.append("PATH_1: ", env.get_string_or("PATH_1", "~")))
+  io.println(string.append(
+    "MAX_FILE_SIZE_MB: ",
+    env.get_string_or("MAX_FILE_SIZE_MB", "~"),
+  ))
+
   let selector = process.new_selector()
   let state = Nil
-
-  let not_found =
-    response.new(404) |> response.set_body(mist.Bytes(bytes_builder.new()))
 
   let assert Ok(_) =
     fn(req: Request(mist.Connection)) -> Response(mist.ResponseData) {
@@ -33,7 +47,7 @@ pub fn main() {
         ["chunk"] -> serve_chunk(req)
         ["file", ..rest] -> serve_file(req, rest)
         ["form"] -> handle_form(req)
-        _ -> not_found
+        path -> string.join(path, "/") |> handle_req
       }
     }
     |> mist.new
@@ -41,6 +55,59 @@ pub fn main() {
     |> mist.start_http
 
   process.sleep_forever()
+}
+
+fn handle_req(path: String) -> Response(mist.ResponseData) {
+  let is_file = string.split(path, ".") |> list.length > 1
+
+  let not_found =
+    response.new(404) |> response.set_body(mist.Bytes(bytes_builder.new()))
+
+  io.println(string.append("Handling request for: ", path))
+  io.println(string.append("should be file? ", is_file |> bool.to_string))
+
+  case is_file {
+    True -> not_found
+    False -> {
+      case fs.get_dir(path) {
+        Error(err) -> {
+          io.println(string.append("Error: ", err))
+          not_found
+        }
+        Ok(dir) ->
+          json.object([
+            #("count", list.length(dir) |> json.int),
+            #(
+              "files",
+              json.array(
+                dir
+                  |> list.fold([], fn(acc, entry) {
+                    case entry {
+                      fs.File(name) -> [name, ..acc]
+                      _ -> acc
+                    }
+                  }),
+                json.string,
+              ),
+            ),
+            #(
+              "dirs",
+              json.array(
+                dir
+                  |> list.fold([], fn(acc, entry) {
+                    case entry {
+                      fs.Directory(name) -> [name, ..acc]
+                      _ -> acc
+                    }
+                  }),
+                json.string,
+              ),
+            ),
+          ])
+          |> util.response
+      }
+    }
+  }
 }
 
 pub type MyMessage {
