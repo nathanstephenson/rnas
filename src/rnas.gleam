@@ -1,5 +1,4 @@
 import dot_env
-import dot_env/env
 import fs
 import gleam/bool
 import gleam/bytes_builder
@@ -24,11 +23,6 @@ pub fn main() {
   dot_env.new()
   |> dot_env.set_path("./.env")
   |> dot_env.load
-  io.println(string.append("PATH_1: ", env.get_string_or("PATH_1", "~")))
-  io.println(string.append(
-    "MAX_FILE_SIZE_MB: ",
-    env.get_string_or("MAX_FILE_SIZE_MB", "~"),
-  ))
 
   let selector = process.new_selector()
   let state = Nil

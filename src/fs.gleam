@@ -49,11 +49,15 @@ pub fn get_dir(path: String) -> Result(List(FSEntry), String) {
     |> fswalk.walk
     |> iterator.try_fold([], fn(acc, it) {
       case it {
-        Ok(entry) ->
-          case !entry.stat.is_directory {
-            True -> Ok([Directory(entry.filename), ..acc])
-            False -> Ok([File(entry.filename), ..acc])
+        Ok(entry) -> {
+          let path_to_remove = string.append(path, "/")
+          let pure_filename =
+            string.replace(entry.filename, each: path_to_remove, with: "")
+          case entry.stat.is_directory {
+            True -> Ok([Directory(pure_filename), ..acc])
+            False -> Ok([File(pure_filename), ..acc])
           }
+        }
         _ -> Error("Failed to read directory")
       }
     })
