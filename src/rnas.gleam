@@ -179,6 +179,24 @@ fn handle_form(req: Request(mist.Connection)) -> Response(mist.ResponseData) {
   |> response.set_body(mist.Bytes(bytes_builder.from_string("Form received")))
 }
 
-fn guess_content_type(_file_path: String) -> String {
-  "text/plain"
+fn guess_content_type(file_path: String) -> String {
+  string.split(file_path, ".")
+  |> list.last
+  |> result.map(fn(ext) {
+    case ext {
+      "html" -> "text/html"
+      "css" -> "text/css"
+      "js" -> "application/javascript"
+      "json" -> "application/json"
+      "png" -> "image/png"
+      "jpg" -> "image/jpeg"
+      "jpeg" -> "image/jpeg"
+      "gif" -> "image/gif"
+      "svg" -> "image/svg+xml"
+      "ico" -> "image/x-icon"
+      "txt" -> "text/plain"
+      _ -> "application/octet-stream"
+    }
+  })
+  |> result.lazy_unwrap(fn() { "text/plain" })
 }
