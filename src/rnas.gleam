@@ -14,6 +14,7 @@ import gleam/otp/actor
 import gleam/result
 import gleam/string
 import mist
+import res
 import util
 
 pub fn main() {
@@ -53,54 +54,28 @@ pub fn main() {
 
 fn handle_req(path: String) -> Response(mist.ResponseData) {
   let is_file = string.split(path, ".") |> list.length > 1
+  let sanitized_path =
+    string.replace(path, each: "..", with: "")
+    |> string.replace(each: "//", with: "/")
+    |> string.replace(each: "/./", with: "/")
+    |> string.replace(each: "%20", with: "\\ ")
 
   let not_found =
     response.new(404) |> response.set_body(mist.Bytes(bytes_builder.new()))
 
-  io.println(string.append("Handling request for: ", path))
+  io.println(string.append("Handling request for: ", sanitized_path))
   io.println(string.append("should be file? ", is_file |> bool.to_string))
 
   case is_file {
     True -> not_found
-    False -> {
-      case fs.get_dir(path) {
+    False ->
+      case fs.get_dir(sanitized_path) {
         Error(err) -> {
           io.println(string.append("Error: ", err))
           not_found
         }
-        Ok(dir) ->
-          json.object([
-            #("count", list.length(dir) |> json.int),
-            #(
-              "files",
-              json.array(
-                dir
-                  |> list.fold([], fn(acc, entry) {
-                    case entry {
-                      fs.File(name) -> [name, ..acc]
-                      _ -> acc
-                    }
-                  }),
-                json.string,
-              ),
-            ),
-            #(
-              "dirs",
-              json.array(
-                dir
-                  |> list.fold([], fn(acc, entry) {
-                    case entry {
-                      fs.Directory(name) -> [name, ..acc]
-                      _ -> acc
-                    }
-                  }),
-                json.string,
-              ),
-            ),
-          ])
-          |> util.response
+        Ok(dir) -> res.dir(dir) |> util.response
       }
-    }
   }
 }
 

@@ -53,9 +53,16 @@ pub fn get_dir(path: String) -> Result(List(FSEntry), String) {
           let path_to_remove = string.append(path, "/")
           let pure_filename =
             string.replace(entry.filename, each: path_to_remove, with: "")
-          case entry.stat.is_directory {
-            True -> Ok([Directory(pure_filename), ..acc])
-            False -> Ok([File(pure_filename), ..acc])
+          case
+            string.contains(pure_filename, "/")
+            || string.contains(pure_filename, " ")
+          {
+            True -> Ok(acc)
+            False ->
+              case entry.stat.is_directory {
+                True -> Ok([Directory(pure_filename), ..acc])
+                False -> Ok([File(pure_filename), ..acc])
+              }
           }
         }
         _ -> Error("Failed to read directory")
