@@ -41,34 +41,39 @@ pub type FSEntry {
 }
 
 pub fn get_dir(path: String) -> Result(List(FSEntry), String) {
-  get_valid_path(path)
-  |> result.try(fn(path) {
-    fswalk.builder()
-    |> fswalk.with_path(path)
-    |> util.println(path)
-    |> fswalk.walk
-    |> iterator.try_fold([], fn(acc, it) {
-      case it {
-        Ok(entry) -> {
-          let path_to_remove = string.append(path, "/")
-          let pure_filename =
-            string.replace(entry.filename, each: path_to_remove, with: "")
-          case
-            string.contains(pure_filename, "/")
-            || string.contains(pure_filename, " ")
-          {
-            True -> Ok(acc)
-            False ->
-              case entry.stat.is_directory {
-                True -> Ok([Directory(pure_filename), ..acc])
-                False -> Ok([File(pure_filename), ..acc])
+  let roots = get_root_paths()
+  case path {
+    "" -> Ok(list.map(roots, fn(p) { Directory(p.name) }))
+    _ ->
+      get_valid_path(path)
+      |> result.try(fn(path) {
+        fswalk.builder()
+        |> fswalk.with_path(path)
+        |> util.println(path)
+        |> fswalk.walk
+        |> iterator.try_fold([], fn(acc, it) {
+          case it {
+            Ok(entry) -> {
+              let path_to_remove = string.append(path, "/")
+              let pure_filename =
+                string.replace(entry.filename, each: path_to_remove, with: "")
+              case
+                string.contains(pure_filename, "/")
+                || string.contains(pure_filename, " ")
+              {
+                True -> Ok(acc)
+                False ->
+                  case entry.stat.is_directory {
+                    True -> Ok([Directory(pure_filename), ..acc])
+                    False -> Ok([File(pure_filename), ..acc])
+                  }
               }
+            }
+            _ -> Error("Failed to read directory")
           }
-        }
-        _ -> Error("Failed to read directory")
-      }
-    })
-  })
+        })
+      })
+  }
 }
 
 type PathPair {
@@ -76,22 +81,7 @@ type PathPair {
 }
 
 fn get_valid_path(path: String) -> Result(String, String) {
-  let paths =
-    list.range(0, 10)
-    |> list.fold([], fn(acc, i) {
-      let path_env = string.append("PATH_", int.to_string(i))
-      let name_env = string.append(path_env, "_NAME")
-      env.get_string(path_env)
-      |> fn(env_path) {
-        case env_path {
-          Ok(p) -> [
-            PathPair(name: env.get_string_or(name_env, p), path: p),
-            ..acc
-          ]
-          _ -> acc
-        }
-      }
-    })
+  let paths = get_root_paths()
   io.println(
     list.map(paths, fn(p: PathPair) {
       p.name |> string.append(" - ") |> string.append(p.path)
@@ -107,4 +97,22 @@ fn get_valid_path(path: String) -> Result(String, String) {
     Ok(p) -> Ok(p)
     _ -> Error("Invalid path (not allowed)")
   }
+}
+
+fn get_root_paths() -> List(PathPair) {
+  list.range(0, 10)
+  |> list.fold([], fn(acc, i) {
+    let path_env = string.append("PATH_", int.to_string(i))
+    let name_env = string.append(path_env, "_NAME")
+    env.get_string(path_env)
+    |> fn(env_path) {
+      case env_path {
+        Ok(p) -> [
+          PathPair(name: env.get_string_or(name_env, p), path: p),
+          ..acc
+        ]
+        _ -> acc
+      }
+    }
+  })
 }
