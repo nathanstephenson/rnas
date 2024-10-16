@@ -60,6 +60,7 @@ pub fn get_dir(path: String) -> Result(List(FSEntry), String) {
               case
                 string.contains(pure_filename, "/")
                 || string.contains(pure_filename, " ")
+                || string.starts_with(pure_filename, ".")
               {
                 True -> Ok(acc)
                 False ->
