@@ -1,4 +1,5 @@
 import dot_env
+import dot_env/env
 import fs
 import gleam/bool
 import gleam/bytes_builder
@@ -28,6 +29,11 @@ pub fn main() {
   let selector = process.new_selector()
   let state = Nil
 
+  let port = case env.get_int("PORT") {
+    Ok(port) -> port
+    _ -> 6969
+  }
+
   let assert Ok(_) =
     fn(req: Request(mist.Connection)) -> Response(mist.ResponseData) {
       case request.path_segments(req) {
@@ -46,7 +52,7 @@ pub fn main() {
       }
     }
     |> mist.new
-    |> mist.port(3000)
+    |> mist.port(port)
     |> mist.start_http
 
   process.sleep_forever()
