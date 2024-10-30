@@ -1,14 +1,13 @@
 import dot_env/env
 import file_streams/file_stream
-import fswalk
 import gcalc
 import gleam/float
 import gleam/int
 import gleam/io
-import gleam/iterator
 import gleam/list
 import gleam/result
 import gleam/string
+import simplifile
 import util
 
 pub fn read(path: String) -> Result(BitArray, String) {
@@ -46,35 +45,55 @@ pub fn get_dir(path: String) -> Result(List(FSEntry), String) {
     "" -> Ok(list.map(roots, fn(p) { Directory(p.name) }))
     _ ->
       get_valid_path(path)
-      |> result.try(fn(path) {
-        fswalk.builder()
-        |> fswalk.with_path(path)
-        |> util.println(path)
-        |> fswalk.walk
-        |> iterator.try_fold([], fn(acc, it) {
-          case it {
-            Ok(entry) -> {
-              let path_to_remove = string.append(path, "/")
-              let pure_filename =
-                string.replace(entry.filename, each: path_to_remove, with: "")
-              case
-                string.contains(pure_filename, "/")
-                || string.contains(pure_filename, " ")
-                || string.starts_with(pure_filename, ".")
-              {
-                True -> Ok(acc)
-                False ->
-                  case entry.stat.is_directory {
-                    True -> Ok([Directory(pure_filename), ..acc])
-                    False -> Ok([File(pure_filename), ..acc])
-                  }
-              }
-            }
-            _ -> Error("Failed to read directory")
-          }
-        })
-      })
+      |> result.try(list_dir)
   }
+}
+
+fn list_dir(path) -> Result(List(FSEntry), String) {
+  simplifile.read_directory(path)
+  |> result.try(fn(entries) {
+    list.try_fold(entries, [], fn(acc, entry) {
+      util.println(entry, entry)
+      case simplifile.is_directory(entry) {
+        Ok(res) ->
+          case res {
+            True -> {
+              util.println(entry, entry <> " is a directory")
+              Ok([Directory(entry), ..acc])
+            }
+            False ->
+              case simplifile.is_file(entry) {
+                Ok(res) ->
+                  case res {
+                    True -> {
+                      util.println(entry, entry <> " is a file")
+                      Ok([File(entry), ..acc])
+                    }
+                    False -> {
+                      util.println(entry, entry <> " not a file or directory")
+                      Ok(acc)
+                    }
+                  }
+                Error(err) -> {
+                  util.println(
+                    entry,
+                    entry <> " error: " <> simplifile.describe_error(err),
+                  )
+                  Error(err)
+                }
+              }
+          }
+        Error(err) -> {
+          util.println(
+            entry,
+            entry <> " error: " <> simplifile.describe_error(err),
+          )
+          Error(err)
+        }
+      }
+    })
+  })
+  |> result.map_error(fn(err) { simplifile.describe_error(err) })
 }
 
 type PathPair {

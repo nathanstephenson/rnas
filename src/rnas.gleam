@@ -8,7 +8,6 @@ import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/io
 import gleam/iterator
-import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
