@@ -53,25 +53,24 @@ fn list_dir(path) -> Result(List(FSEntry), String) {
   simplifile.read_directory(path)
   |> result.try(fn(entries) {
     list.try_fold(entries, [], fn(acc, entry) {
-      case simplifile.is_directory(path <> "/" <> entry) {
-        Ok(res) ->
-          case res {
-            True -> Ok([Directory(entry), ..acc])
-            False ->
-              case simplifile.is_file(path <> "/" <> entry) {
-                Ok(res) ->
-                  case res {
-                    True -> Ok([File(entry), ..acc])
-                    False -> {
-                      util.println(entry, entry <> " not a file or directory")
-                      Ok(acc)
-                    }
-                  }
-                Error(err) -> Error(err)
+      simplifile.is_directory(path <> "/" <> entry)
+      |> result.try(fn(is_dir) {
+        case is_dir {
+          True -> Ok([Directory(entry), ..acc])
+          False -> {
+            simplifile.is_file(path <> "/" <> entry)
+            |> result.try(fn(is_file) {
+              case is_file {
+                True -> Ok([File(entry), ..acc])
+                False -> {
+                  util.println(entry, entry <> " not a file or directory")
+                  Ok(acc)
+                }
               }
+            })
           }
-        Error(err) -> Error(err)
-      }
+        }
+      })
     })
   })
   |> result.map_error(fn(err) { simplifile.describe_error(err) })
