@@ -72,7 +72,14 @@ fn handle_req(path: String) -> Response(mist.ResponseData) {
   io.println(string.append("should be file? ", is_file |> bool.to_string))
 
   case is_file {
-    True -> not_found
+    True ->
+      case fs.read(sanitized_path) {
+        Error(err) -> {
+          io.println(string.append("Error: ", err))
+          not_found
+        }
+        Ok(file) -> res.file(file) |> util.response
+      }
     False ->
       case fs.get_dir(sanitized_path) {
         Error(err) -> {

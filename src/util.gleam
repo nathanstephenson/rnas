@@ -4,8 +4,8 @@ import gleam/io
 import gleam/json
 import mist
 
-pub fn println(it, str) {
-  io.println(str)
+pub fn println(it, str: String) {
+  io.println(str <> it)
   it
 }
 

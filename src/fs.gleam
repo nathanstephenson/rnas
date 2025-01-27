@@ -1,6 +1,6 @@
 import dot_env/env
 import file_streams/file_stream
-import gcalc
+import file_streams/file_stream_error
 import gleam/float
 import gleam/int
 import gleam/io
@@ -11,27 +11,25 @@ import simplifile
 import util
 
 pub fn read(path: String) -> Result(BitArray, String) {
+  let max_file_size = int.to_float(env.get_int_or("MAX_FILE_SIZE_MB", 1024))
+  let assert Ok(len) =
+    max_file_size *. 1024.0
+    |> float.floor
+    |> float.to_string
+    |> string.split(".")
+    |> list.first
+    |> result.try(int.parse)
+
   get_valid_path(path)
   |> result.try(fn(path) {
-    let max_file_size = int.to_float(env.get_int_or("MAX_FILE_SIZE_MB", 1024))
     file_stream.open_read(path)
-    |> result.map(fn(stream) {
-      max_file_size *. gcalc.pow(1024.0, 3.0)
-      |> float.floor
-      |> float.to_string
-      |> int.parse
-      |> result.map(fn(byte_len) {
-        case file_stream.read_bytes(stream, byte_len) {
-          Ok(bytes) -> Ok(bytes)
-          _ -> Error("Failed to read file")
-        }
-      })
-      |> result.lazy_unwrap(fn() {
-        Error("Failed to read file - invalid byte length")
-      })
+    |> result.try(fn(stream) { file_stream.read_bytes(stream, len) })
+    |> result.map_error(fn(err) {
+      io.println(file_stream_error.describe(err))
+      "Failed to read file at " <> path
     })
-    |> result.lazy_unwrap(fn() { Error("Failed to open file") })
   })
+  |> result.map_error(fn(_err) { "Failed to open file" })
 }
 
 pub type FSEntry {
