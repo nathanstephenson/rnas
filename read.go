@@ -1,0 +1,121 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
+func Read(path string, cErr chan<- error, cDir chan<- string, cFile chan<- []byte, chunkSize int) {
+	defer close(cErr)
+
+	info, fsErr := os.Stat(path)
+	if fsErr != nil {
+		cErr <- fmt.Errorf("Error reading file or directory: %s", fsErr.Error())
+		return
+	}
+	if info.IsDir() {
+		close(cFile)
+		dirErr := readDir(path, cDir)
+		if dirErr != nil {
+			cErr <- dirErr
+		}
+		return
+	}
+	close(cDir)
+	fileErr := readFile(path, cFile, chunkSize)
+	if fileErr != nil {
+		cErr <- fileErr
+	}
+	return
+}
+
+type DirInfo struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+type FileInfo struct {
+	Name     string `json:"name"`
+	Size     int    `json:"size"`
+	Modified int    `json:"modified"`
+}
+
+func readFile(path string, c chan<- []byte, chunkSize int) error {
+	defer close(c)
+
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("Error reading file: %s", err.Error())
+	}
+	defer file.Close()
+
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("Error reading file: %s", err.Error())
+	}
+
+	for offset := int64(0); offset < fileInfo.Size(); offset += int64(chunkSize) {
+		realChunkSize := min(chunkSize, int(fileInfo.Size()-offset))
+		fileBytes := make([]byte, realChunkSize)
+		_, err = file.ReadAt(fileBytes, offset)
+		if err != nil {
+			return fmt.Errorf("Error reading file: %s", err.Error())
+		}
+
+		c <- fileBytes
+	}
+	return nil
+}
+
+func readDir(path string, c chan<- string) error {
+	defer close(c)
+
+	dir, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("Error reading directory: %s", err.Error())
+	}
+	defer dir.Close()
+
+	files, err := dir.Readdir(0)
+	if err != nil {
+		return fmt.Errorf("Error reading directory: %s", err.Error())
+	}
+
+	for idx, file := range files {
+		if idx == 0 {
+			c <- "["
+		}
+
+		if file.IsDir() {
+			subFiles, err := dir.Readdir(0)
+			if err != nil {
+				return fmt.Errorf("Error reading directory: %s", err.Error())
+			}
+			s, err := json.Marshal(DirInfo{Name: file.Name(), Count: len(subFiles)})
+			if err != nil {
+				fmt.Println(fmt.Errorf("Error marshalling directory info: %s", err.Error()))
+				continue
+			}
+			fmt.Println("dir", s)
+			c <- string(s)
+			continue
+		}
+
+		s, err := json.Marshal(FileInfo{Name: file.Name(), Size: int(file.Size()), Modified: int(file.ModTime().Unix())})
+		if err != nil {
+			fmt.Println(fmt.Errorf("Error marshalling file info: %s", err.Error()))
+			continue
+		}
+
+		fmt.Println("file", s)
+
+		c <- string(s)
+
+		if idx == len(files)-1 {
+			c <- "]"
+		} else {
+			c <- ","
+		}
+	}
+	return nil
+}
