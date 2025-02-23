@@ -25,7 +25,7 @@ func handler(basePaths map[string]string, chunkSize int) func(http.ResponseWrite
 		pathParts := strings.Split(path, "/")
 		fmt.Println("path prefix", pathParts[1])
 		realPath, realPathExists := basePaths[pathParts[1]]
-		if !realPathExists {
+		if realPath != "" && !realPathExists {
 			http.Error(w, fmt.Sprint("Path ", path, " not found!"), http.StatusNotFound)
 			return
 		}
@@ -41,7 +41,7 @@ func handler(basePaths map[string]string, chunkSize int) func(http.ResponseWrite
 		cFile := make(chan []byte)
 		cErr := make(chan error)
 
-		go Read(fullPath, cErr, cDir, cFile, chunkSize)
+		go Read(fullPath, basePaths, cErr, cDir, cFile, chunkSize)
 		func(w http.ResponseWriter, cErr <-chan error, cDir <-chan string, cFile <-chan []byte) {
 			cFileClosed := false
 			cDirClosed := false
@@ -53,14 +53,12 @@ func handler(basePaths map[string]string, chunkSize int) func(http.ResponseWrite
 						cDirClosed = true
 						break
 					}
-					fmt.Println("fs item", fsItem)
 					w.Write([]byte(fsItem))
 				case chunk, chunkOk := <-cFile:
 					if !chunkOk {
 						cFileClosed = true
 						break
 					}
-					fmt.Println("chunk", chunk)
 					w.Write(chunk)
 					flusher.Flush()
 				case err, errOk := <-cErr:

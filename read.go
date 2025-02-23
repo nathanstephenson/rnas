@@ -4,10 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
-func Read(path string, cErr chan<- error, cDir chan<- string, cFile chan<- []byte, chunkSize int) {
+func Read(path string, basePaths map[string]string, cErr chan<- error, cDir chan<- string, cFile chan<- []byte, chunkSize int) {
 	defer close(cErr)
+
+	if path == "" {
+		close(cFile)
+		baseErr := readBase(basePaths, cDir)
+		if baseErr != nil {
+			cErr <- baseErr
+		}
+		return
+	}
 
 	info, fsErr := os.Stat(path)
 	if fsErr != nil {
@@ -87,7 +97,17 @@ func readDir(path string, c chan<- string) error {
 		}
 
 		if file.IsDir() {
-			subFiles, err := dir.Readdir(0)
+			separator := "/"
+			if strings.HasSuffix(path, "/") {
+				separator = ""
+			}
+			subPath := path + separator + file.Name()
+			subDir, err := os.Open(subPath)
+			if err != nil {
+				return fmt.Errorf("Error reading directory %s: %s", subPath, err.Error())
+			}
+			defer dir.Close()
+			subFiles, err := subDir.Readdir(0)
 			if err != nil {
 				return fmt.Errorf("Error reading directory: %s", err.Error())
 			}
@@ -116,6 +136,43 @@ func readDir(path string, c chan<- string) error {
 		} else {
 			c <- ","
 		}
+	}
+	return nil
+}
+
+func readBase(basePaths map[string]string, c chan<- string) error {
+	defer close(c)
+
+	idx := 0
+	for name, path := range basePaths {
+		if idx == 0 {
+			c <- "["
+		}
+		dir, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("Error reading directory: %s", err.Error())
+		}
+		defer dir.Close()
+
+		files, err := dir.Readdir(0)
+		if err != nil {
+			return fmt.Errorf("Error reading directory: %s", err.Error())
+		}
+
+		s, err := json.Marshal(DirInfo{Name: name, Count: len(files)})
+		if err != nil {
+			fmt.Println(fmt.Errorf("Error marshalling directory info: %s", err.Error()))
+			continue
+		}
+		fmt.Println("dir", s)
+		c <- string(s)
+
+		if idx == len(basePaths)-1 {
+			c <- "]"
+		} else {
+			c <- ","
+		}
+		idx++
 	}
 	return nil
 }
