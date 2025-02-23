@@ -102,34 +102,26 @@ func readDir(path string, c chan<- string) error {
 				separator = ""
 			}
 			subPath := path + separator + file.Name()
-			subDir, err := os.Open(subPath)
-			if err != nil {
-				return fmt.Errorf("Error reading directory %s: %s", subPath, err.Error())
+			dirInfo, dirErr := getDirInfo(file.Name(), subPath)
+			if dirErr != nil {
+				return dirErr
 			}
-			defer dir.Close()
-			subFiles, err := subDir.Readdir(0)
-			if err != nil {
-				return fmt.Errorf("Error reading directory: %s", err.Error())
-			}
-			s, err := json.Marshal(DirInfo{Name: file.Name(), Count: len(subFiles)})
+			s, err := json.Marshal(dirInfo)
 			if err != nil {
 				fmt.Println(fmt.Errorf("Error marshalling directory info: %s", err.Error()))
 				continue
 			}
 			fmt.Println("dir", s)
 			c <- string(s)
-			continue
+		} else { // if file
+			s, err := json.Marshal(FileInfo{Name: file.Name(), Size: int(file.Size()), Modified: int(file.ModTime().Unix())})
+			if err != nil {
+				fmt.Println(fmt.Errorf("Error marshalling file info: %s", err.Error()))
+				continue
+			}
+			fmt.Println("file", s)
+			c <- string(s)
 		}
-
-		s, err := json.Marshal(FileInfo{Name: file.Name(), Size: int(file.Size()), Modified: int(file.ModTime().Unix())})
-		if err != nil {
-			fmt.Println(fmt.Errorf("Error marshalling file info: %s", err.Error()))
-			continue
-		}
-
-		fmt.Println("file", s)
-
-		c <- string(s)
 
 		if idx == len(files)-1 {
 			c <- "]"
@@ -148,18 +140,11 @@ func readBase(basePaths map[string]string, c chan<- string) error {
 		if idx == 0 {
 			c <- "["
 		}
-		dir, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("Error reading directory: %s", err.Error())
+		dirInfo, dirErr := getDirInfo(name, path)
+		if dirErr != nil {
+			return dirErr
 		}
-		defer dir.Close()
-
-		files, err := dir.Readdir(0)
-		if err != nil {
-			return fmt.Errorf("Error reading directory: %s", err.Error())
-		}
-
-		s, err := json.Marshal(DirInfo{Name: name, Count: len(files)})
+		s, err := json.Marshal(dirInfo)
 		if err != nil {
 			fmt.Println(fmt.Errorf("Error marshalling directory info: %s", err.Error()))
 			continue
@@ -175,4 +160,17 @@ func readBase(basePaths map[string]string, c chan<- string) error {
 		idx++
 	}
 	return nil
+}
+
+func getDirInfo(name string, path string) (*DirInfo, error) {
+	dir, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("Error reading directory %s: %s", path, err.Error())
+	}
+	defer dir.Close()
+	subFiles, err := dir.Readdir(0)
+	if err != nil {
+		return nil, fmt.Errorf("Error reading directory: %s", err.Error())
+	}
+	return &DirInfo{Name: name, Count: len(subFiles)}, nil
 }
