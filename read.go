@@ -108,18 +108,14 @@ func readDir(path string, c chan<- string) error {
 			}
 			s, err := json.Marshal(dirInfo)
 			if err != nil {
-				fmt.Println(fmt.Errorf("Error marshalling directory info: %s", err.Error()))
-				continue
+				return fmt.Errorf("Error marshalling directory info: %s", err.Error())
 			}
-			fmt.Println("dir", s)
 			c <- string(s)
 		} else { // if file
 			s, err := json.Marshal(FileInfo{Name: file.Name(), Size: int(file.Size()), Modified: int(file.ModTime().Unix())})
 			if err != nil {
-				fmt.Println(fmt.Errorf("Error marshalling file info: %s", err.Error()))
-				continue
+				return fmt.Errorf("Error marshalling file info: %s", err.Error())
 			}
-			fmt.Println("file", s)
 			c <- string(s)
 		}
 
@@ -170,7 +166,7 @@ func getDirInfo(name string, path string) (*DirInfo, error) {
 	defer dir.Close()
 	subFiles, err := dir.Readdir(0)
 	if err != nil {
-		return nil, fmt.Errorf("Error reading directory: %s", err.Error())
+		return nil, fmt.Errorf("Error getting files from directory %s: %s", path, err.Error())
 	}
 	return &DirInfo{Name: name, Count: len(subFiles)}, nil
 }
