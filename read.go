@@ -41,10 +41,12 @@ func Read(path string, basePaths map[string]string, cErr chan<- error, cDir chan
 }
 
 type DirInfo struct {
+	Type  string `json:"type"` // should always be "directory"
 	Name  string `json:"name"`
 	Count int    `json:"count"`
 }
 type FileInfo struct {
+	Type     string `json:"type"` // should always be "file"
 	Name     string `json:"name"`
 	Size     int    `json:"size"`
 	Modified int    `json:"modified"`
@@ -112,7 +114,7 @@ func readDir(path string, c chan<- string) error {
 			}
 			c <- string(s)
 		} else { // if file
-			s, err := json.Marshal(FileInfo{Name: file.Name(), Size: int(file.Size()), Modified: int(file.ModTime().Unix())})
+			s, err := json.Marshal(FileInfo{Type: "file", Name: file.Name(), Size: int(file.Size()), Modified: int(file.ModTime().Unix())})
 			if err != nil {
 				return fmt.Errorf("Error marshalling file info: %s", err.Error())
 			}
@@ -168,5 +170,5 @@ func getDirInfo(name string, path string) (*DirInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Error getting files from directory %s: %s", path, err.Error())
 	}
-	return &DirInfo{Name: name, Count: len(subFiles)}, nil
+	return &DirInfo{Type: "directory", Name: name, Count: len(subFiles)}, nil
 }

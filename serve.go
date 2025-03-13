@@ -68,6 +68,7 @@ func handler(basePaths map[string]string, chunkSize int) func(http.ResponseWrite
 					}
 					fmt.Println("error", err)
 					http.Error(w, err.Error(), http.StatusInternalServerError)
+					flusher.Flush()
 					return
 				}
 			}
