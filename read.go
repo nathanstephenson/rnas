@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/gabriel-vasile/mimetype"
 )
 
 func Read(path string, basePaths map[string]string, cErr chan<- error, cDir chan<- string, cFile chan<- []byte, chunkSize int) {
@@ -47,6 +49,7 @@ type DirInfo struct {
 }
 type FileInfo struct {
 	Type     string `json:"type"` // should always be "file"
+	MimeType string `json:"mime"`
 	Name     string `json:"name"`
 	Size     int    `json:"size"`
 	Modified int    `json:"modified"`
@@ -114,7 +117,11 @@ func readDir(path string, c chan<- string) error {
 			}
 			c <- string(s)
 		} else { // if file
-			s, err := json.Marshal(FileInfo{Type: "file", Name: file.Name(), Size: int(file.Size()), Modified: int(file.ModTime().Unix())})
+			mime, mimeErr := mimetype.DetectFile(fmt.Sprintf("%v/%v", path, file.Name()))
+			if mimeErr != nil {
+				return mimeErr
+			}
+			s, err := json.Marshal(FileInfo{Type: "file", MimeType: mime.String(), Name: file.Name(), Size: int(file.Size()), Modified: int(file.ModTime().Unix())})
 			if err != nil {
 				return fmt.Errorf("Error marshalling file info: %s", err.Error())
 			}
