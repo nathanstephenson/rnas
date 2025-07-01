@@ -7,14 +7,14 @@ import (
 	"strings"
 )
 
-func Serve(basePaths map[string]string, chunkSize int, port int) {
-	http.HandleFunc("/", handler(basePaths, chunkSize))
+func Serve(basePaths map[string]string, streamablePath string, chunkSize int, port int) {
+	http.HandleFunc("/", handler(basePaths, streamablePath, chunkSize))
 
 	fmt.Println("Listening on port", port)
 	http.ListenAndServe(fmt.Sprint(":", port), nil)
 }
 
-func handler(basePaths map[string]string, chunkSize int) func(http.ResponseWriter, *http.Request) {
+func handler(basePaths map[string]string, streamablePath string, chunkSize int) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		flusher, flusherok := w.(http.Flusher)
 		if !flusherok {
@@ -22,8 +22,10 @@ func handler(basePaths map[string]string, chunkSize int) func(http.ResponseWrite
 			return
 		}
 		path := r.URL.Path
+		// query := r.URL.Query()
 		pathParts := strings.Split(path, "/")
 		fmt.Println("path prefix", pathParts[1])
+		fmt.Println("full", r.FormValue("something"))
 		realPath, realPathExists := basePaths[pathParts[1]]
 		if realPath != "" && !realPathExists {
 			http.Error(w, fmt.Sprint("Path ", path, " not found!"), http.StatusNotFound)
@@ -34,6 +36,7 @@ func handler(basePaths map[string]string, chunkSize int) func(http.ResponseWrite
 		fmt.Println("full path", fullPath)
 
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Transfer-Encoding", "chunked")
 		w.WriteHeader(http.StatusOK)
 
@@ -41,7 +44,7 @@ func handler(basePaths map[string]string, chunkSize int) func(http.ResponseWrite
 		cFile := make(chan []byte)
 		cErr := make(chan error)
 
-		go Read(fullPath, basePaths, cErr, cDir, cFile, chunkSize)
+		go Read(fullPath, basePaths, path, streamablePath, cErr, cDir, cFile, chunkSize)
 		func(w http.ResponseWriter, cErr <-chan error, cDir <-chan string, cFile <-chan []byte) {
 			cFileClosed := false
 			cDirClosed := false

@@ -39,8 +39,13 @@ func main() {
 		log.Fatal("Error converting MAX_FILE_SIZE_MB env var to int", chunkSizeErr.Error())
 	}
 
+	streamablePath, streamablePathExists := os.LookupEnv("STREAMABLE_PATH")
+	if !streamablePathExists {
+		log.Fatal("Error getting streamable path from env vars", patherr.Error())
+	}
+
 	fmt.Println("Port:", port, "Paths:", paths)
-	Serve(paths, chunkSize, port)
+	Serve(paths, streamablePath, chunkSize, port)
 }
 
 func getPaths(pathNumber int, paths map[string]string) (map[string]string, error) {
