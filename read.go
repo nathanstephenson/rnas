@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
+	"slices"
 	"strings"
 
 	"github.com/gabriel-vasile/mimetype"
@@ -26,7 +26,7 @@ func Read(path string, basePaths map[string]string, virtualPath string, streamab
 	splitPath := strings.Split(virtualPath, "/")
 	fileName := splitPath[len(splitPath)-1]
 	virtualPathPrefix := strings.Join(splitPath[:len(splitPath)-1], "/")
-	streamDir, streamDirErr := getStreamDir(fileName, virtualPathPrefix, streamablePath)
+	streamDir, streamDirErr := getStreamablePath(fileName, virtualPathPrefix, streamablePath)
 	if streamDirErr != nil {
 		cErr <- fmt.Errorf("Error reading file or directory: %s", streamDirErr.Error())
 		return
@@ -34,7 +34,7 @@ func Read(path string, basePaths map[string]string, virtualPath string, streamab
 	if streamDir != nil {
 		close(cDir)
 		fmt.Println("is streaming file!", path, virtualPath)
-		streamFilePath := fmt.Sprintf("%s%s/%s/%s", streamablePath, virtualPathPrefix, *streamDir, fileName)
+		streamFilePath := fmt.Sprintf("%s/%s", *streamDir, fileName)
 		fileErr := readFile(streamFilePath, virtualPath, streamablePath, cFile, chunkSize)
 		if fileErr != nil {
 			cErr <- fileErr
@@ -96,9 +96,9 @@ func readFile(path string, virtualPath string, streamablePath string, c chan<- [
 
 	if strings.HasPrefix(mime.String(), "video/") {
 		fmt.Println(fmt.Sprintf("this is a video: %v (%s)", mime.String(), path))
-		file, fileInfo, err = getStreamableDir(path, virtualPath, streamablePath)
-		fmt.Println(fmt.Sprintf("video: %v", fileInfo.Name()))
+		file, fileInfo, err = getStreamFile(path, virtualPath, streamablePath)
 	}
+
 	defer file.Close()
 	if err != nil {
 		return fmt.Errorf("Error reading file 2: %s", err.Error())
@@ -220,10 +220,15 @@ func getDirInfo(name string, path string) (*DirInfo, error) {
 	return &DirInfo{Type: "directory", Name: name, Count: len(subFiles)}, nil
 }
 
-func runFfmpeg(path string, outputFilePath string) error {
-	commandArgs := fmt.Sprintf("-i %s -codec: copy -hls_list_size 0 -f hls %s", path, outputFilePath)
-	fmt.Println(fmt.Sprintf("ffmpeg input: %s", commandArgs))
-	command := exec.Command("ffmpeg", commandArgs)
+func runFfmpeg(fileName string, path string, outputPath string) error {
+	filterComplex := "[0:v]split=2[v1][v2]; [v1]scale=w=1920:h=1080[v1out]; [v2]scale=w=1280:h=720[v2out]"
+	mapV1 := []string{"-map", "[v1out]", "-c:v:0", "libx264", "-b:v:0", "5000k", "-maxrate:v:0", "5350k", "-bufsize:v:0", "7500k"}
+	mapV2 := []string{"-map", "[v2out]", "-c:v:1", "libx264", "-b:v:1", "2000k", "-maxrate:v:1", "2996k", "-bufsize:v:1", "4200k"}
+	m1 := []string{"-map", "a:0", "-c:a", "aac", "-b:a:0", "192k", "-ac", "2"}
+	m2 := []string{"-map", "a:0", "-c:a", "aac", "-b:a:1", "128k", "-ac", "2"}
+	args := slices.Concat([]string{"-i", path, "-filter_complex", filterComplex}, mapV1, mapV2, m1, m2, []string{"-hls_list_size", "0", "-f", "hls", "-hls_time", "10", "-hls_playlist_type", "vod", "-hls_flags", "independent_segments", "-hls_segment_type", "mpegts", "-hls_segment_filename", fmt.Sprintf("%s%s%s", outputPath, fileName, "%v-%03d.ts"), "-master_pl_name", fmt.Sprintf("%s.%s", fileName, "m3u8"), "-var_stream_map", "v:0,a:0 v:1,a:1", fmt.Sprintf("%s%s%s", outputPath, fileName, "%v-playlist.m3u8")})
+	command := exec.Command("ffmpeg", args...)
+	fmt.Println(fmt.Sprintf("ffmpeg input: %s", command.String()))
 	stdout, cmdErr := command.Output()
 	if cmdErr != nil {
 		return fmt.Errorf("Error running ffmpeg: %s", cmdErr.Error())
@@ -232,29 +237,60 @@ func runFfmpeg(path string, outputFilePath string) error {
 	return nil
 }
 
-func getStreamableDir(path string, virtualPath string, streamablePath string) (*os.File, os.FileInfo, error) {
+func getStreamFile(path string, virtualPath string, streamablePath string) (*os.File, os.FileInfo, error) {
 	parts := strings.Split(virtualPath, "/")
 	fileName := parts[len(parts)-1]
 	if fileName == "" {
 		return nil, nil, fmt.Errorf("filename could not be found at virtual path %s", virtualPath)
 	}
 	sanitisedFileName := strings.ReplaceAll(fileName, ".", "-")
-	streamableDir := strings.TrimSuffix(virtualPath, fileName)
-	outputPath := fmt.Sprintf("%s%s%s/", streamablePath, streamableDir, sanitisedFileName)
+	outputPath := fmt.Sprintf("%s%s/", streamablePath, strings.Join(parts[:len(parts)-1], "/"))
 	outputFileName := fmt.Sprintf("%s.%s", sanitisedFileName, "m3u8")
 	outputFilePath := fmt.Sprintf("%s%s", outputPath, outputFileName)
-	dir, err := os.Open(outputPath)
-	if err != nil || dir == nil {
+	dir, err := os.ReadDir(outputPath)
+	if err != nil {
+		fmt.Println("not found, creating dir", outputPath)
 		mkdirErr := os.MkdirAll(outputPath, 0777)
 		if mkdirErr != nil {
 			return nil, nil, mkdirErr
 		}
-		ffmpegErr := runFfmpeg(path, outputFilePath)
+	}
+	fmt.Println("trying to open file, ", outputFilePath)
+	file, err := os.Open(outputFilePath)
+	isLoadingFile := false
+	for _, subdir := range dir {
+		if strings.HasPrefix(subdir.Name(), sanitisedFileName) {
+			isLoadingFile = true
+		}
+	}
+	if err != nil && !isLoadingFile {
+		ffmpegErr := runFfmpeg(sanitisedFileName, path, outputPath)
 		if ffmpegErr != nil {
 			return nil, nil, ffmpegErr
 		}
 	}
-	file, err := os.Open(outputFilePath)
+	for {
+		if !isLoadingFile {
+			break
+		}
+		fmt.Println("loading file, waiting", outputPath, outputFileName)
+		dir, err = os.ReadDir(outputPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, subdir := range dir {
+			if !isLoadingFile {
+				break
+			}
+			if strings.HasPrefix(subdir.Name(), sanitisedFileName) {
+				isLoadingFile = true
+			}
+			if subdir.Name() == outputFileName {
+				isLoadingFile = false
+			}
+		}
+	}
+	file, err = os.Open(outputFilePath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -265,15 +301,17 @@ func getStreamableDir(path string, virtualPath string, streamablePath string) (*
 	return file, fileInfo, nil
 }
 
-func getStreamDir(fileName string, pathPrefix string, streamablePath string) (*string, error) {
+func getStreamablePath(fileName string, pathPrefix string, streamablePath string) (*string, error) {
 	dir, err := os.ReadDir(streamablePath)
 	if err != nil {
 		return nil, err
 	}
 	for _, subdir := range dir {
 		dirname := subdir.Name()
-		if subdir.IsDir() && strings.Contains(pathPrefix, dirname) {
-			found, findErr := getStreamDir(fileName, pathPrefix, fmt.Sprintf("%s/%s", streamablePath, dirname))
+		isDir := subdir.IsDir()
+		if isDir && strings.Contains(pathPrefix, dirname) {
+			fmt.Println("going deeper:", dirname)
+			found, findErr := getStreamablePath(fileName, pathPrefix, fmt.Sprintf("%s/%s", streamablePath, dirname))
 			if findErr != nil {
 				return nil, findErr
 			}
@@ -282,16 +320,9 @@ func getStreamDir(fileName string, pathPrefix string, streamablePath string) (*s
 			}
 		}
 		fmt.Println("dirname:", dirname)
-		parts := strings.Split(fileName, dirname)
-		if len(parts) > 1 {
-			suffix := parts[1]
-			subparts := strings.Split(suffix, ".ts")
-			if len(subparts) > 0 {
-				_, convErr := strconv.Atoi(subparts[0])
-				if convErr == nil {
-					return &dirname, nil
-				}
-			}
+		if !isDir && fileName == dirname {
+			fmt.Println("found", fileName, dirname)
+			return &streamablePath, nil
 		}
 	}
 	return nil, nil
