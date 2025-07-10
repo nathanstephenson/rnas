@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/gabriel-vasile/mimetype"
@@ -97,12 +98,11 @@ func readFile(path string, virtualPath string, streamablePath string, c chan<- [
 	if strings.HasPrefix(mime.String(), "video/") {
 		fmt.Println(fmt.Sprintf("this is a video: %v (%s)", mime.String(), path))
 		file, fileInfo, err = getStreamFile(path, virtualPath, streamablePath)
+		if err != nil {
+			return fmt.Errorf("Error reading streaming file: %s", err.Error())
+		}
 	}
-
 	defer file.Close()
-	if err != nil {
-		return fmt.Errorf("Error reading file 2: %s", err.Error())
-	}
 
 	for offset := int64(0); offset < fileInfo.Size(); offset += int64(chunkSize) {
 		realChunkSize := min(chunkSize, int(fileInfo.Size()-offset))
@@ -220,20 +220,77 @@ func getDirInfo(name string, path string) (*DirInfo, error) {
 	return &DirInfo{Type: "directory", Name: name, Count: len(subFiles)}, nil
 }
 
-func runFfmpeg(fileName string, path string, outputPath string) error {
-	filterComplex := "[0:v]split=2[v1][v2]; [v1]scale=w=1920:h=1080[v1out]; [v2]scale=w=1280:h=720[v2out]"
-	mapV1 := []string{"-map", "[v1out]", "-c:v:0", "libx264", "-b:v:0", "5000k", "-maxrate:v:0", "5350k", "-bufsize:v:0", "7500k"}
-	mapV2 := []string{"-map", "[v2out]", "-c:v:1", "libx264", "-b:v:1", "2000k", "-maxrate:v:1", "2996k", "-bufsize:v:1", "4200k"}
-	m1 := []string{"-map", "a:0", "-c:a", "aac", "-b:a:0", "192k", "-ac", "2"}
-	m2 := []string{"-map", "a:0", "-c:a", "aac", "-b:a:1", "128k", "-ac", "2"}
-	args := slices.Concat([]string{"-i", path, "-filter_complex", filterComplex}, mapV1, mapV2, m1, m2, []string{"-hls_list_size", "0", "-f", "hls", "-hls_time", "10", "-hls_playlist_type", "vod", "-hls_flags", "independent_segments", "-hls_segment_type", "mpegts", "-hls_segment_filename", fmt.Sprintf("%s%s%s", outputPath, fileName, "%v-%03d.ts"), "-master_pl_name", fmt.Sprintf("%s.%s", fileName, "m3u8"), "-var_stream_map", "v:0,a:0 v:1,a:1", fmt.Sprintf("%s%s%s", outputPath, fileName, "%v-playlist.m3u8")})
-	command := exec.Command("ffmpeg", args...)
-	fmt.Println(fmt.Sprintf("ffmpeg input: %s", command.String()))
-	stdout, cmdErr := command.Output()
-	if cmdErr != nil {
-		return fmt.Errorf("Error running ffmpeg: %s", cmdErr.Error())
+type FFMpegOutput struct {
+	IsSource     bool
+	Width        int
+	Height       int
+	AudioBitrate int
+}
+
+var p1080 = FFMpegOutput{Width: 1920, Height: 1080, AudioBitrate: 256, IsSource: false}
+var p720 = FFMpegOutput{Width: 1280, Height: 720, AudioBitrate: 192, IsSource: false}
+var p360 = FFMpegOutput{Width: 640, Height: 360, AudioBitrate: 128, IsSource: false}
+
+func getArgs(width int, height int) (filterComplex, videoMap, audioMap, buffMap []string) {
+	source := FFMpegOutput{Width: width, Height: height, AudioBitrate: 320, IsSource: true}
+	filterComplex = []string{}
+	videoMap = []string{}
+	audioMap = []string{}
+	buffMap = []string{}
+	filterComplexOut := ""
+	idx := 0
+
+	allOutputs := []FFMpegOutput{source, p1080, p720, p360}
+	for _, o := range allOutputs {
+		if o.IsSource || o.Width < source.Width || o.Height < source.Height {
+			filterComplexOut = filterComplexOut + fmt.Sprintf("[v%v]", idx)
+			filterComplex = append(filterComplex, fmt.Sprintf("[v%v]scale=w=%v:h=%v[v%vout]", idx, o.Width, o.Height, idx))
+			videoMap = append(videoMap, strings.Split(fmt.Sprintf("-map [v%vout] -c:v:%v libx265 -preset medium -crf 23 -g 60", idx, idx), " ")...)
+			audioMap = append(audioMap, strings.Split(fmt.Sprintf("-map a:0 -c:a:%v aac -b:a:%v %vk", idx, idx, o.AudioBitrate), " ")...)
+			buffMap = append(buffMap, fmt.Sprintf("v:%v,a:%v", idx, idx))
+			idx++
+		}
 	}
-	fmt.Println(fmt.Sprintf("ffmpeg output: %s", string(stdout)))
+	filterComplexMap := fmt.Sprintf("[0:v]split=%v%v", idx, filterComplexOut)
+	filterComplex = slices.Concat([]string{filterComplexMap}, filterComplex)
+
+	return
+}
+
+func runFfmpeg(fileName string, path string, outputPath string) error {
+	dimensionsArgs := []string{"-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", path}
+	dimensions := exec.Command("ffprobe", dimensionsArgs...)
+	dimensionsOut, dimensionsErr := dimensions.Output()
+	fmt.Println(fmt.Sprintf("dimensions input: %s", dimensions.String()))
+	var maxWidth string
+	var maxHeight string
+	if dimensionsErr != nil {
+		maxWidth = "1920"
+		maxHeight = "1080"
+	} else {
+		dimensionsArr := strings.Split(string(dimensionsOut), ",")
+		maxWidth, maxHeight = dimensionsArr[0], dimensionsArr[1]
+	}
+	width, wErr := strconv.Atoi(strings.TrimSpace(maxWidth))
+	if wErr != nil {
+		return wErr
+	}
+	height, hErr := strconv.Atoi(strings.TrimSpace(maxHeight))
+	if hErr != nil {
+		return hErr
+	}
+	fmt.Println("dimensions:", maxWidth, maxHeight)
+
+	filterComplex, videoMap, audioMap, buffMap := getArgs(width, height)
+	transcodeArgs := slices.Concat([]string{"-i", path, "-filter_complex", fmt.Sprintf("%v", strings.Join(filterComplex, "; "))}, videoMap, audioMap, []string{"-hls_list_size", "0", "-f", "hls", "-hls_time", "10", "-hls_playlist_type", "vod", "-hls_flags", "independent_segments", "-hls_segment_type", "mpegts", "-hls_segment_filename", fmt.Sprintf("%s%s%s", outputPath, fileName, "%v-%03d.ts"), "-master_pl_name", fmt.Sprintf("%s.%s", fileName, "m3u8"), "-var_stream_map", fmt.Sprintf("%v", strings.Join(buffMap, " "))}, []string{fmt.Sprintf("%s%s%s", outputPath, fileName, "%v-playlist.m3u8")})
+	transcode := exec.Command("ffmpeg", transcodeArgs...)
+
+	fmt.Println(fmt.Sprintf("ffmpeg input: %s", transcode.String()))
+	transcodeOut, transcodeErr := transcode.Output()
+	if transcodeErr != nil {
+		return fmt.Errorf("Error running ffmpeg: %s", transcodeErr.Error())
+	}
+	fmt.Println(fmt.Sprintf("ffmpeg output: %s", string(transcodeOut)))
 	return nil
 }
 
