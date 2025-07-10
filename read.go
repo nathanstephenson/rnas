@@ -294,6 +294,8 @@ func runFfmpeg(fileName string, path string, outputPath string) error {
 	return nil
 }
 
+var ffmpegRuns = map[string]bool{}
+
 func getStreamFile(path string, virtualPath string, streamablePath string) (*os.File, os.FileInfo, error) {
 	parts := strings.Split(virtualPath, "/")
 	fileName := parts[len(parts)-1]
@@ -312,38 +314,45 @@ func getStreamFile(path string, virtualPath string, streamablePath string) (*os.
 			return nil, nil, mkdirErr
 		}
 	}
-	fmt.Println("trying to open file, ", outputFilePath)
+	fmt.Println("trying to open file, ", outputFilePath, "in", outputPath, " - ", len(dir), "files")
 	file, err := os.Open(outputFilePath)
-	isLoadingFile := false
+	isLoadingFile, hasLoadedFile := ffmpegRuns[outputFilePath]
+	fileLoading := isLoadingFile && hasLoadedFile
 	for _, subdir := range dir {
+		fmt.Println("looking at", subdir.Name(), "for", sanitisedFileName)
 		if strings.HasPrefix(subdir.Name(), sanitisedFileName) {
-			isLoadingFile = true
+			fmt.Println("found loading file")
+			fileLoading = true
+			break
 		}
 	}
-	if err != nil && !isLoadingFile {
+	if err != nil && !fileLoading {
+		ffmpegRuns[outputFilePath] = true
 		ffmpegErr := runFfmpeg(sanitisedFileName, path, outputPath)
 		if ffmpegErr != nil {
+			delete(ffmpegRuns, outputFilePath)
 			return nil, nil, ffmpegErr
 		}
 	}
 	for {
-		if !isLoadingFile {
+		isLoadingFile, hasLoadedFile = ffmpegRuns[outputFilePath]
+		fileLoading = isLoadingFile && hasLoadedFile
+		if !fileLoading {
 			break
 		}
-		fmt.Println("loading file, waiting", outputPath, outputFileName)
 		dir, err = os.ReadDir(outputPath)
 		if err != nil {
 			return nil, nil, err
 		}
 		for _, subdir := range dir {
-			if !isLoadingFile {
+			if !fileLoading {
 				break
 			}
 			if strings.HasPrefix(subdir.Name(), sanitisedFileName) {
-				isLoadingFile = true
+				fileLoading = true
 			}
 			if subdir.Name() == outputFileName {
-				isLoadingFile = false
+				ffmpegRuns[outputFilePath] = false
 			}
 		}
 	}
