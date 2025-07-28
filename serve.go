@@ -41,7 +41,7 @@ func handler(basePaths map[string]string, streamablePath string, chunkSize int) 
 			return
 		}
 		if r.Method == http.MethodDelete {
-			del(w, flusher, fullPath)
+			del(w, flusher, fullPath, path, streamablePath)
 			return
 		}
 
@@ -120,13 +120,13 @@ func post(w http.ResponseWriter, body io.ReadCloser, flusher http.Flusher, fullP
 	}(w, cErr)
 }
 
-func del(w http.ResponseWriter, flusher http.Flusher, fullPath string) {
+func del(w http.ResponseWriter, flusher http.Flusher, fullPath string, virtualPath string, streamablePath string) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	cErr := make(chan error)
 
-	go Delete(fullPath, cErr)
+	go Delete(fullPath, virtualPath, streamablePath, cErr)
 	func(w http.ResponseWriter, cErr <-chan error) {
 		cErrClosed := false
 		for !cErrClosed {

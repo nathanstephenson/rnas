@@ -4,10 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"slices"
-	"strconv"
+	"rnas/streaming"
 	"strings"
+	"sync"
 
 	"github.com/gabriel-vasile/mimetype"
 )
@@ -24,10 +23,8 @@ func Read(path string, basePaths map[string]string, virtualPath string, streamab
 		return
 	}
 
-	splitPath := strings.Split(virtualPath, "/")
-	fileName := splitPath[len(splitPath)-1]
-	virtualPathPrefix := strings.Join(splitPath[:len(splitPath)-1], "/")
-	streamDir, streamDirErr := getStreamablePath(fileName, virtualPathPrefix, streamablePath)
+	fileName, _, virtualPathPrefix := streaming.GetStreamStrings(virtualPath)
+	streamDir, streamDirErr := streaming.GetStreamablePath(fileName, virtualPathPrefix, streamablePath)
 	if streamDirErr != nil {
 		cErr <- fmt.Errorf("Error reading file or directory: %s", streamDirErr.Error())
 		return
@@ -220,80 +217,7 @@ func getDirInfo(name string, path string) (*DirInfo, error) {
 	return &DirInfo{Type: "directory", Name: name, Count: len(subFiles)}, nil
 }
 
-type FFMpegOutput struct {
-	IsSource     bool
-	Width        int
-	Height       int
-	AudioBitrate int
-}
-
-var p1080 = FFMpegOutput{Width: 1920, Height: 1080, AudioBitrate: 256, IsSource: false}
-var p720 = FFMpegOutput{Width: 1280, Height: 720, AudioBitrate: 192, IsSource: false}
-var p360 = FFMpegOutput{Width: 640, Height: 360, AudioBitrate: 128, IsSource: false}
-
-func getArgs(width int, height int) (filterComplex, videoMap, audioMap, buffMap []string) {
-	source := FFMpegOutput{Width: width, Height: height, AudioBitrate: 320, IsSource: true}
-	filterComplex = []string{}
-	videoMap = []string{}
-	audioMap = []string{}
-	buffMap = []string{}
-	filterComplexOut := ""
-	idx := 0
-
-	allOutputs := []FFMpegOutput{source, p1080, p720, p360}
-	for _, o := range allOutputs {
-		if o.IsSource || o.Width < source.Width || o.Height < source.Height {
-			filterComplexOut = filterComplexOut + fmt.Sprintf("[v%v]", idx)
-			filterComplex = append(filterComplex, fmt.Sprintf("[v%v]scale=w=%v:h=%v[v%vout]", idx, o.Width, o.Height, idx))
-			videoMap = append(videoMap, strings.Split(fmt.Sprintf("-map [v%vout] -c:v:%v libx265 -preset medium -crf 23 -g 60", idx, idx), " ")...)
-			audioMap = append(audioMap, strings.Split(fmt.Sprintf("-map a:0 -c:a:%v aac -b:a:%v %vk", idx, idx, o.AudioBitrate), " ")...)
-			buffMap = append(buffMap, fmt.Sprintf("v:%v,a:%v", idx, idx))
-			idx++
-		}
-	}
-	filterComplexMap := fmt.Sprintf("[0:v]split=%v%v", idx, filterComplexOut)
-	filterComplex = slices.Concat([]string{filterComplexMap}, filterComplex)
-
-	return
-}
-
-func runFfmpeg(fileName string, path string, outputPath string) error {
-	dimensionsArgs := []string{"-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", path}
-	dimensions := exec.Command("ffprobe", dimensionsArgs...)
-	dimensionsOut, dimensionsErr := dimensions.Output()
-	fmt.Println(fmt.Sprintf("dimensions input: %s", dimensions.String()))
-	var maxWidth string
-	var maxHeight string
-	if dimensionsErr != nil {
-		maxWidth = "1920"
-		maxHeight = "1080"
-	} else {
-		dimensionsArr := strings.Split(string(dimensionsOut), ",")
-		maxWidth, maxHeight = dimensionsArr[0], dimensionsArr[1]
-	}
-	width, wErr := strconv.Atoi(strings.TrimSpace(maxWidth))
-	if wErr != nil {
-		return wErr
-	}
-	height, hErr := strconv.Atoi(strings.TrimSpace(maxHeight))
-	if hErr != nil {
-		return hErr
-	}
-	fmt.Println("dimensions:", maxWidth, maxHeight)
-
-	filterComplex, videoMap, audioMap, buffMap := getArgs(width, height)
-	transcodeArgs := slices.Concat([]string{"-i", path, "-filter_complex", fmt.Sprintf("%v", strings.Join(filterComplex, "; "))}, videoMap, audioMap, []string{"-hls_list_size", "0", "-f", "hls", "-hls_time", "10", "-hls_playlist_type", "vod", "-hls_flags", "independent_segments", "-hls_segment_type", "mpegts", "-hls_segment_filename", fmt.Sprintf("%s%s%s", outputPath, fileName, "%v-%03d.ts"), "-master_pl_name", fmt.Sprintf("%s.%s", fileName, "m3u8"), "-var_stream_map", fmt.Sprintf("%v", strings.Join(buffMap, " "))}, []string{fmt.Sprintf("%s%s%s", outputPath, fileName, "%v-playlist.m3u8")})
-	transcode := exec.Command("ffmpeg", transcodeArgs...)
-
-	fmt.Println(fmt.Sprintf("ffmpeg input: %s", transcode.String()))
-	transcodeOut, transcodeErr := transcode.Output()
-	if transcodeErr != nil {
-		return fmt.Errorf("Error running ffmpeg: %s", transcodeErr.Error())
-	}
-	fmt.Println(fmt.Sprintf("ffmpeg output: %s", string(transcodeOut)))
-	return nil
-}
-
+var ffmpegRunsLock = sync.RWMutex{}
 var ffmpegRuns = map[string]bool{}
 
 func getStreamFile(path string, virtualPath string, streamablePath string) (*os.File, os.FileInfo, error) {
@@ -306,6 +230,7 @@ func getStreamFile(path string, virtualPath string, streamablePath string) (*os.
 	outputPath := fmt.Sprintf("%s%s/", streamablePath, strings.Join(parts[:len(parts)-1], "/"))
 	outputFileName := fmt.Sprintf("%s.%s", sanitisedFileName, "m3u8")
 	outputFilePath := fmt.Sprintf("%s%s", outputPath, outputFileName)
+	ffmpegRunsLock.Lock()
 	dir, err := os.ReadDir(outputPath)
 	if err != nil {
 		fmt.Println("not found, creating dir", outputPath)
@@ -328,7 +253,7 @@ func getStreamFile(path string, virtualPath string, streamablePath string) (*os.
 	}
 	if err != nil && !fileLoading {
 		ffmpegRuns[outputFilePath] = true
-		ffmpegErr := runFfmpeg(sanitisedFileName, path, outputPath)
+		ffmpegErr := streaming.RunFfmpeg(sanitisedFileName, path, outputPath)
 		if ffmpegErr != nil {
 			delete(ffmpegRuns, outputFilePath)
 			return nil, nil, ffmpegErr
@@ -356,6 +281,7 @@ func getStreamFile(path string, virtualPath string, streamablePath string) (*os.
 			}
 		}
 	}
+	ffmpegRunsLock.Unlock()
 	file, err = os.Open(outputFilePath)
 	if err != nil {
 		return nil, nil, err
@@ -365,31 +291,4 @@ func getStreamFile(path string, virtualPath string, streamablePath string) (*os.
 		return nil, nil, err
 	}
 	return file, fileInfo, nil
-}
-
-func getStreamablePath(fileName string, pathPrefix string, streamablePath string) (*string, error) {
-	dir, err := os.ReadDir(streamablePath)
-	if err != nil {
-		return nil, err
-	}
-	for _, subdir := range dir {
-		dirname := subdir.Name()
-		isDir := subdir.IsDir()
-		if isDir && strings.Contains(pathPrefix, dirname) {
-			fmt.Println("going deeper:", dirname)
-			found, findErr := getStreamablePath(fileName, pathPrefix, fmt.Sprintf("%s/%s", streamablePath, dirname))
-			if findErr != nil {
-				return nil, findErr
-			}
-			if found != nil {
-				return found, nil
-			}
-		}
-		fmt.Println("dirname:", dirname)
-		if !isDir && fileName == dirname {
-			fmt.Println("found", fileName, dirname)
-			return &streamablePath, nil
-		}
-	}
-	return nil, nil
 }
